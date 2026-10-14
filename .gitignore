@@ -1,0 +1,20 @@
+# node / vite / tauri
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Rust
+**/*.rs.bk
+Cargo.lock
+*.pdb
+
+# SO / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+
+# temporales de SnapX
+*.tmp

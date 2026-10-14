@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!-- Controles comunes v6: los file dialogs del plugin dialog los necesitan.
+       (El manifiesto por defecto de Tauri solo trae esto; hay que mantenerlo.) -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+  <!-- PerMonitorV2: sin esto Windows virtualiza el DPI en pantallas al 125/150 %
+       y el overlay/editor se descuadran (ventana de un tamano, contenido de otro). -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">permonitorv2, system</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>

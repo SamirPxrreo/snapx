@@ -1,0 +1,37 @@
+[package]
+name = "snapx"
+version = "0.1.0"
+description = "SnapX - captura y anotacion de pantalla estilo CleanShot para Windows"
+authors = ["SnapX"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "snapx_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "snapx"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+screenshots = "0.8"
+image = "0.24"
+base64 = "0.22"
+anyhow = "1"
+windows = { version = "0.51", features = ["Win32_UI_HiDpi"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
