@@ -8,32 +8,35 @@
   <body>
     <div id="root"></div>
     <script>
-      // Trampa de diagnostico VISIBLE (se lee en capturas de pantalla).
-      function snapxBootBox(text, color) {
-        var d = document.createElement("div");
-        d.style.cssText =
-          "position:fixed;left:8px;top:8px;z-index:99999;color:#fff;background:" +
-          color +
-          ";padding:8px 12px;font:12px monospace;white-space:pre-wrap;max-width:90vw";
-        d.textContent = text;
-        document.documentElement.appendChild(d);
-      }
-      window.addEventListener("error", function (e) {
-        snapxBootBox(
-          "JS-ERROR: " + (e.message || e.type) + "\n" + (e.filename || "") + ":" + (e.lineno || ""),
-          "#b91c1c"
-        );
-      });
-      window.addEventListener("unhandledrejection", function (e) {
-        var m = e.reason && e.reason.message ? e.reason.message : String(e.reason);
-        snapxBootBox("JS-REJECT: " + m, "#b91c1c");
-      });
-      // Si el modulo no arranca en 6 s (p. ej. no cargo el JS), se ve este aviso.
-      setTimeout(function () {
-        if (!window.__snapxBooted) {
-          snapxBootBox("JS-NO-BOOT: el modulo no arranco (¿fallo la carga del JS?)", "#b45309");
+      // Trampa de diagnostico SOLO en desarrollo: en un equipo lento el modulo
+      // puede tardar y el aviso mentiria ("no arranco") en la app compilada.
+      if (import.meta.env && import.meta.env.DEV) {
+        function snapxBootBox(text, color) {
+          var d = document.createElement("div");
+          d.style.cssText =
+            "position:fixed;left:8px;top:8px;z-index:99999;color:#fff;background:" +
+            color +
+            ";padding:8px 12px;font:12px monospace;white-space:pre-wrap;max-width:90vw";
+          d.textContent = text;
+          document.documentElement.appendChild(d);
         }
-      }, 6000);
+        window.addEventListener("error", function (e) {
+          snapxBootBox(
+            "JS-ERROR: " + (e.message || e.type) + "\n" + (e.filename || "") + ":" + (e.lineno || ""),
+            "#b91c1c"
+          );
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          var m = e.reason && e.reason.message ? e.reason.message : String(e.reason);
+          snapxBootBox("JS-REJECT: " + m, "#b91c1c");
+        });
+        // Si el modulo no arranca en 6 s (p. ej. no cargo el JS), se ve este aviso.
+        setTimeout(function () {
+          if (!window.__snapxBooted) {
+            snapxBootBox("JS-NO-BOOT: el modulo no arranco (¿fallo la carga del JS?)", "#b45309");
+          }
+        }, 6000);
+      }
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>

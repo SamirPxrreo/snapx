@@ -125,6 +125,8 @@ pub fn run() {
             commands::capture_virtual_desktop,
             commands::crop_capture,
             commands::save_png,
+            commands::copy_image_to_clipboard,
+            commands::set_resizable,
             commands::enter_overlay,
             commands::leave_overlay,
         ])

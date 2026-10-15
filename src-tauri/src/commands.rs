@@ -222,17 +222,64 @@ pub async fn capture_virtual_desktop() -> Result<VirtualDesktop, String> {
     })
 }
 
+/// Decodifica un data URL (`data:image/png;base64,....`) a bytes planos.
+/// Acepta tambien base64 pelado por si el frontend lo manda asi.
+fn decode_data_url(data_url: &str) -> Result<Vec<u8>, String> {
+    let b64 = match data_url.split_once(',') {
+        Some((_, b64)) => b64,
+        None => data_url,
+    };
+    let b64 = b64.trim();
+    STANDARD
+        .decode(b64)
+        .map_err(|e| format!("base64 invalido: {e}"))
+}
+
 /// Escribe un data URL PNG a una ruta del disco.
 #[tauri::command]
 pub async fn save_png(path: String, data_url: String) -> Result<(), String> {
-    let b64 = data_url
-        .split(',')
-        .nth(1)
-        .ok_or_else(|| "data URL invalido".to_string())?;
-    let bytes = STANDARD
-        .decode(b64)
-        .map_err(|e| format!("base64 invalido: {e}"))?;
-    std::fs::write(&path, &bytes).map_err(|e| format!("no se pudo escribir: {e}"))?;
+    let bytes = decode_data_url(&data_url)?;
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(&path, &bytes).map_err(|e| format!("no se pudo escribir {path}: {e}"))?;
+    dbg_log(&format!("save_png: ok {path} ({} bytes)", bytes.len()));
+    Ok(())
+}
+
+/// Pone la imagen editada en el portapapeles de Windows.
+///
+/// Va por la API nativa (`arboard` -> CF_DIB) en lugar del plugin de Tauri:
+/// el plugin falla en silencio con capturas grandes y devuelve errores poco
+/// descriptivos, aqui cada fallo baja al frontend con un mensaje util.
+#[tauri::command]
+pub async fn copy_image_to_clipboard(data_url: String) -> Result<(), String> {
+    use arboard::{Clipboard, ImageData};
+
+    dbg_log("copy_image_to_clipboard: inicio");
+    let bytes = decode_data_url(&data_url)?;
+    let img = image::load_from_memory(&bytes)
+        .map_err(|e| format!("no se pudo decodificar el PNG: {e}"))?;
+    let rgba = img.to_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+    if w == 0 || h == 0 {
+        return Err("la imagen a copiar esta vacia".to_string());
+    }
+    if w > i32::MAX as u32 || h > i32::MAX as u32 {
+        return Err("la imagen a copiar es demasiado grande".to_string());
+    }
+
+    let mut clipboard = Clipboard::new()
+        .map_err(|e| format!("no se pudo abrir el portapapeles: {e}"))?;
+    clipboard
+        .set_image(ImageData {
+            width: w as usize,
+            height: h as usize,
+            bytes: rgba.into_raw().into(),
+        })
+        .map_err(|e| format!("no se pudo escribir la imagen en el portapapeles: {e}"))?;
+
+    dbg_log(&format!("copy_image_to_clipboard: ok {w}x{h}"));
     Ok(())
 }
 
@@ -268,6 +315,19 @@ pub async fn crop_capture(path: String, x: u32, y: u32, w: u32, h: u32) -> Resul
     ))
 }
 
+/// Activa o desactiva el redimensionado de la ventana.
+///
+/// El editor de capturas se beneficia mucho de poder agrandarse (sobre todo
+/// en pantallas 4K), pero la ventana de inicio debe quedar fija, asi que el
+/// flag se cambia desde el frontend al entrar y al salir del editor.
+#[tauri::command]
+pub async fn set_resizable(app: tauri::AppHandle, resizable: bool) -> Result<(), String> {
+    let win = app
+        .get_webview_window("main")
+        .ok_or_else(|| "ventana principal no encontrada".to_string())?;
+    win.set_resizable(resizable).map_err(|e| e.to_string())
+}
+
 /// Pone la ventana principal en modo overlay transparente a pantalla completa.
 #[tauri::command]
 pub async fn enter_overlay(
@@ -283,12 +343,16 @@ pub async fn enter_overlay(
     dbg_log(&format!("enter_overlay: x={x} y={y} w={w} h={h}"));
     win.set_always_on_top(true).map_err(|e| e.to_string())?;
     dbg_log("enter_overlay: always_on_top ok");
+    // Imprescindible: si la app estaba cerrada en la bandeja (ventana oculta),
+    // el overlay se colocaria en pantalla pero no se veria nada.
+    win.show().map_err(|e| e.to_string())?;
     win.set_position(LogicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
     dbg_log("enter_overlay: position ok");
     win.set_size(LogicalSize::new(w, h))
         .map_err(|e| e.to_string())?;
     dbg_log("enter_overlay: size ok");
+    win.unminimize().map_err(|e| e.to_string())?;
     win.set_focus().map_err(|e| e.to_string())?;
     dbg_log("enter_overlay: ok");
     Ok(())
@@ -298,10 +362,13 @@ pub async fn enter_overlay(
 /// Tambien le quita el "siempre encima", la muestra y la restaura por si
 /// estaba minimizada: solo el overlay vive en primer plano.
 #[tauri::command]
-pub async fn leave_overlay(app: tauri::AppHandle, w: u32, h: u32) -> Result<(), String> {    let win = app
+pub async fn leave_overlay(app: tauri::AppHandle, w: u32, h: u32) -> Result<(), String> {
+    let win = app
         .get_webview_window("main")
         .ok_or_else(|| "ventana principal no encontrada".to_string())?;
     win.set_always_on_top(false).map_err(|e| e.to_string())?;
+    win.show().map_err(|e| e.to_string())?;
+    win.unminimize().map_err(|e| e.to_string())?;
     dbg_log(&format!("leave_overlay: w={w} h={h}"));
     if let Some(mon) = win.current_monitor().map_err(|e| e.to_string())? {
         let mw = mon.size().width as f64 / mon.scale_factor();
@@ -316,4 +383,55 @@ pub async fn leave_overlay(app: tauri::AppHandle, w: u32, h: u32) -> Result<(), 
     }
     win.set_focus().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::Rgba;
+
+    fn png_data_url(w: u32, h: u32) -> String {
+        let mut img = RgbaImage::new(w, h);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255]);
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+        format!("data:image/png;base64,{}", STANDARD.encode(buf.into_inner()))
+    }
+
+    #[test]
+    fn decodifica_data_urls_y_base64_pelado() {
+        let url = png_data_url(4, 3);
+        let bytes = decode_data_url(&url).unwrap();
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+
+        let pelado = url.split_once(',').unwrap().1;
+        assert_eq!(decode_data_url(pelado).unwrap(), bytes);
+        assert!(decode_data_url("no-es-base64-!!!").is_err());
+    }
+
+    /// El fallo que reportaba la app: la imagen editada no llegaba al portapapeles.
+    /// Esto ejercita el comando nativo real contra el portapapeles de Windows.
+    #[test]
+    fn copia_la_imagen_al_portapapeles() {
+        use arboard::Clipboard;
+
+        let (w, h) = (24u32, 16u32);
+        tauri::async_runtime::block_on(copy_image_to_clipboard(png_data_url(w, h)))
+            .expect("deberia escribir en el portapapeles");
+
+        let mut cb = Clipboard::new().expect("abrir portapapeles");
+        let leido = cb.get_image().expect("leer imagen del portapapeles");
+        assert_eq!((leido.width, leido.height), (w as usize, h as usize));
+        assert_eq!(leido.bytes.len(), (w * h * 4) as usize);
+    }
+
+    #[test]
+    fn rechaza_imagenes_que_no_se_pueden_decodificar() {
+        let r = tauri::async_runtime::block_on(copy_image_to_clipboard(
+            "data:image/png;base64,QUJD".into(),
+        ));
+        assert!(r.is_err());
+    }
 }

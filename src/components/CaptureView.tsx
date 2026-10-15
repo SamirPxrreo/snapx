@@ -1,17 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { VirtualDesktop, Rect } from "../lib/types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { VirtualDesktop, Rect, Pt } from "../lib/types";
 
 interface Props {
   capture: VirtualDesktop;
   onCancel: () => void;
   /** Rectangulo en pixeles FISICOS. El recorte lo hace Rust (sin taint). */
   onSelect: (rect: Rect) => void;
-  onError: (msg: string) => void;
-}
-
-interface Pt {
-  x: number;
-  y: number;
 }
 
 /**
@@ -23,10 +17,11 @@ interface Pt {
  * La escala efectiva se mide de la ventana real (px fisicos / CSS px), de modo
  * que un overlay descuadrado por DPI igualmente mapea bien las coordenadas.
  */
-export default function CaptureView({ capture, onCancel, onSelect, onError }: Props) {
+export default function CaptureView({ capture, onCancel, onSelect }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [dragStart, setDragStart] = useState<Pt | null>(null);
   const [dragCur, setDragCur] = useState<Pt | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   /** Pixeles fisicos por CSS px, medidos de la ventana real. */
   const effScale = useCallback((): number => {
@@ -39,25 +34,28 @@ export default function CaptureView({ capture, onCancel, onSelect, onError }: Pr
     (rectCss: Rect) => {
       const s = effScale();
       onSelect({
-        x: rectCss.x * s,
-        y: rectCss.y * s,
-        width: rectCss.width * s,
-        height: rectCss.height * s,
+        x: Math.max(0, Math.round(rectCss.x * s)),
+        y: Math.max(0, Math.round(rectCss.y * s)),
+        width: Math.max(1, Math.round(rectCss.width * s)),
+        height: Math.max(1, Math.round(rectCss.height * s)),
       });
     },
     [effScale, onSelect]
   );
 
   // seleccion normalizada en coordenadas CSS mostradas
-  const sel: Rect | null =
-    dragStart && dragCur
-      ? {
-          x: Math.min(dragStart.x, dragCur.x),
-          y: Math.min(dragStart.y, dragCur.y),
-          width: Math.abs(dragCur.x - dragStart.x),
-          height: Math.abs(dragCur.y - dragStart.y),
-        }
-      : null;
+  const sel: Rect | null = useMemo(
+    () =>
+      dragStart && dragCur
+        ? {
+            x: Math.min(dragStart.x, dragCur.x),
+            y: Math.min(dragStart.y, dragCur.y),
+            width: Math.abs(dragCur.x - dragStart.x),
+            height: Math.abs(dragCur.y - dragStart.y),
+          }
+        : null,
+    [dragStart, dragCur]
+  );
 
   const confirmSelection = useCallback(() => {
     if (!sel || sel.width < 4 || sel.height < 4) return;
@@ -69,22 +67,21 @@ export default function CaptureView({ capture, onCancel, onSelect, onError }: Pr
       const s = effScale();
       const px = p.x * s + capture.min_x;
       const py = p.y * s + capture.min_y;
-      const m =
-        capture.monitors.find(
-          (m) => px >= m.x && px < m.x + m.width && py >= m.y && py < m.y + m.height
-        ) ?? capture.monitors[0];
+      const m = capture.monitors.find(
+        (m) => px >= m.x && px < m.x + m.width && py >= m.y && py < m.y + m.height
+      );
       if (!m) {
-        onError("No se encontro el monitor bajo el cursor.");
+        setNotice("No se encontro ningun monitor bajo el cursor.");
         return;
       }
       onSelect({
-        x: m.x - capture.min_x,
-        y: m.y - capture.min_y,
+        x: Math.max(0, m.x - capture.min_x),
+        y: Math.max(0, m.y - capture.min_y),
         width: m.width,
         height: m.height,
       });
     },
-    [capture, effScale, onSelect, onError]
+    [capture, effScale, onSelect]
   );
 
   // teclado: Enter confirma, Esc cancela
@@ -118,7 +115,8 @@ export default function CaptureView({ capture, onCancel, onSelect, onError }: Pr
     const p = localPoint(e);
     setDragStart(p);
     setDragCur(p);
-    (e.target as Element).setPointerCapture?.(e.pointerId);
+    setNotice(null);
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -169,18 +167,28 @@ export default function CaptureView({ capture, onCancel, onSelect, onError }: Pr
         </div>
       )}
 
+      <div className="capture-toolbar" onPointerDown={(e) => e.stopPropagation()}>
+        <span className="capture-title">SnapX</span>
+        <button className="act-btn ghost" onClick={onCancel} title="Cancelar (Esc)">
+          Cancelar
+        </button>
+      </div>
+
       <div className="capture-hint">
-        <strong>Arrastra</strong> para seleccionar un area · <strong>Doble clic</strong> captura
-        ese monitor · <strong>Enter</strong> confirma · <strong>Esc</strong> cancela
+        <strong>Arrastra</strong> para elegir un área · <strong>Doble clic</strong> captura ese
+        monitor · <strong>Enter</strong> confirma · <strong>Esc</strong> cancela
       </div>
 
       <div className="monitor-badges">
         {capture.monitors.map((m, i) => (
           <span key={`${m.name}-${i}`}>
-            {i + 1}. {m.name} {m.is_primary ? "(principal)" : ""}
+            {i + 1}. {m.name}
+            {m.is_primary ? " (principal)" : ""} — {m.width}×{m.height}
           </span>
         ))}
       </div>
+
+      {notice && <div className="toast toast-err capture-notice">{notice}</div>}
     </div>
   );
 }

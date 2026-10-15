@@ -8,6 +8,11 @@ export default defineConfig(async () => ({
   server: {
     port: 5173,
     strictPort: true,
+    // src-tauri/target lo usa cargo en paralelo: sin esto el watcher choca
+    // con los .exe que se estan enlazando y vite muere con EBUSY.
+    watch: {
+      ignored: ["**/src-tauri/**", "**/dist/**"],
+    },
   },
   build: {
     target: "chrome110",

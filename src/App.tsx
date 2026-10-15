@@ -11,6 +11,7 @@ import {
   enterOverlay,
   getHotkey,
   leaveOverlay,
+  setResizable,
   DEMO_IMAGE,
 } from "./lib/tauri";
 import type { VirtualDesktop, Rect } from "./lib/types";
@@ -20,42 +21,64 @@ type View =
   | { kind: "capture"; capture: VirtualDesktop }
   | { kind: "annotate"; imageSrc: string; width: number; height: number };
 
+const HOME_SIZE = { w: 620, h: 470 };
+
 export default function App() {
   const [view, setView] = useState<View>({ kind: "home" });
   const [error, setError] = useState<string | null>(null);
   const [hotkey, setHotkey] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   // Ref espejo de la vista para el atajo global (evita capturar dos veces).
   const viewRef = useRef<View>({ kind: "home" });
   viewRef.current = view;
 
-  // Lee el atajo global registrado para mostrarlo en home.
   useEffect(() => {
     getHotkey()
       .then(setHotkey)
       .catch(() => setHotkey(null));
   }, []);
 
+  /** Vuelve a la ventana de inicio: tamaño fijo, centrada y sin zoom. */
+  const goHome = useCallback(async () => {
+    try {
+      await setResizable(false);
+      await leaveOverlay(HOME_SIZE.w, HOME_SIZE.h);
+    } catch {
+      /* si el ajuste de ventana falla seguimos: la vista ya ha cambiado */
+    }
+    setView({ kind: "home" });
+  }, []);
+
+  /** Abre el editor con la captura ya recortada. */
+  const openEditor = useCallback(async (dataUrl: string, w: number, h: number) => {
+    const es = editorSize(w, h);
+    await leaveOverlay(es.w, es.h);
+    await setResizable(true);
+    setView({ kind: "annotate", imageSrc: dataUrl, width: Math.round(w), height: Math.round(h) });
+  }, []);
+
   // Modo demostracion: ?demo=annotate abre directamente el editor
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("demo") === "annotate") {
-      const src = DEMO_IMAGE(960, 620);
-      setView({ kind: "annotate", imageSrc: src, width: 960, height: 620 });
-      void leaveOverlay(1024, 720);
+      void openEditor(DEMO_IMAGE(1280, 800), 1280, 800);
     }
+  }, [openEditor]);
+
+  /** Estaciona la ventana fuera del escritorio para que no salga en la foto. */
+  const park = useCallback(async () => {
+    await getCurrentWindow().setPosition(new LogicalPosition(-10000, -10000));
+    await new Promise((r) => setTimeout(r, 320));
   }, []);
 
   const startAreaCapture = useCallback(async () => {
+    if (busy) return;
     setError(null);
+    setBusy(true);
     try {
-      // Estaciona nuestra ventana fuera de la pantalla para que NO salga en la
-      // foto, y espera a que el compositor repinte sin ella (como Recortes).
-      // (No se usa hide/show: en este entorno dejan la ventana en un estado
-      // que cuelga los invokes siguientes.)
-      await getCurrentWindow().setPosition(new LogicalPosition(-10000, -10000));
-      await new Promise((r) => setTimeout(r, 300));
+      await park();
       const capture = await captureVirtualDesktop();
-      // El overlay se coloca en coordenadas logicas del escritorio virtual
+      // El overlay se coloca en coordenadas lógicas del escritorio virtual
       const scale = capture.scale > 0 ? capture.scale : 1;
       const ox = Math.round(capture.min_x / scale);
       const oy = Math.round(capture.min_y / scale);
@@ -65,105 +88,82 @@ export default function App() {
       setView({ kind: "capture", capture });
     } catch (e) {
       // Si algo fallo, la ventana vuelve a casa centrada (nunca invisible).
-      try {
-        await leaveOverlay(620, 470);
-      } catch {
-        /* noop */
-      }
+      await goHome();
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
-  }, []);
+  }, [busy, park, goHome]);
 
-  const startFullCapture = useCallback(async (mode: "primary" | "all") => {
-    setError(null);
-    try {
-      // Estaciona nuestra ventana fuera de la pantalla para que NO salga en la foto.
-      await getCurrentWindow().setPosition(new LogicalPosition(-10000, -10000));
-      await new Promise((r) => setTimeout(r, 300));
-      const capture = await captureVirtualDesktop();
-      let rect: Rect;
-      if (mode === "all") {
-        rect = { x: 0, y: 0, width: capture.width, height: capture.height };
-      } else {
-        const m = capture.monitors.find((m) => m.is_primary) ?? capture.monitors[0];
-        rect = {
-          x: m.x - capture.min_x,
-          y: m.y - capture.min_y,
-          width: m.width,
-          height: m.height,
-        };
-      }
-      // recorta en Rust y abre el editor en ventana de tamano fijo
-      // (la captura se adapta dentro).
-      const dataUrl = await cropCapture(capture.path, rect);
-      const es = editorSize();
-      await leaveOverlay(es.w, es.h);
-      setView({ kind: "annotate", imageSrc: dataUrl, width: rect.width, height: rect.height });
-    } catch (e) {
+  const startFullCapture = useCallback(
+    async (mode: "primary" | "all") => {
+      if (busy) return;
+      setError(null);
+      setBusy(true);
       try {
-        await leaveOverlay(620, 470);
-      } catch {
-        /* noop */
+        await park();
+        const capture = await captureVirtualDesktop();
+        let rect: Rect;
+        if (mode === "all") {
+          rect = { x: 0, y: 0, width: capture.width, height: capture.height };
+        } else {
+          const m = capture.monitors.find((m) => m.is_primary) ?? capture.monitors[0];
+          if (!m) throw new Error("No se detecto ningun monitor.");
+          rect = {
+            x: m.x - capture.min_x,
+            y: m.y - capture.min_y,
+            width: m.width,
+            height: m.height,
+          };
+        }
+        // recorta en Rust y abre el editor (la captura se adapta dentro)
+        const dataUrl = await cropCapture(capture.path, rect);
+        await openEditor(dataUrl, rect.width, rect.height);
+      } catch (e) {
+        await goHome();
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
       }
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
+    },
+    [busy, park, openEditor, goHome]
+  );
 
-  const backHome = useCallback(async () => {
-    await leaveOverlay(620, 470);
-    setView({ kind: "home" });
-  }, []);
+  const handleSelect = useCallback(
+    async (capture: VirtualDesktop, rect: Rect) => {
+      try {
+        const dataUrl = await cropCapture(capture.path, rect);
+        await openEditor(dataUrl, rect.width, rect.height);
+      } catch (e) {
+        await goHome();
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [openEditor, goHome]
+  );
 
-  const captureError = useCallback((msg: string) => setError(msg), []);
-
-  // Atajo global (PrintScreen o Ctrl+Shift+S): abre captura de area solo si
-  // estamos en home; en overlay/editor se ignora.
+  // Atajo global (o menu de la bandeja): captura de area solo desde el inicio,
+  // en overlay o editor se ignora para no romper lo que estas haciendo.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen("snapx-global-capture", () => {
       if (viewRef.current.kind === "home") {
         void startAreaCapture();
       }
-    }).then((u) => {
-      unlisten = u;
-    });
+    })
+      .then((u) => {
+        unlisten = u;
+      })
+      .catch(() => undefined);
     return () => unlisten?.();
   }, [startAreaCapture]);
-
-  if (error) {
-    return (
-      <div className="error-window">
-        <h2>Algo fallo</h2>
-        <pre>{error}</pre>
-        <button onClick={() => setError(null)}>Volver</button>
-      </div>
-    );
-  }
 
   if (view.kind === "capture") {
     return (
       <CaptureView
         capture={view.capture}
-        onCancel={backHome}
-        onError={captureError}
-        onSelect={(rect) => {
-          void (async () => {
-            try {
-              const dataUrl = await cropCapture(view.capture.path, rect);
-              // Ventana de editor de tamano fijo: la captura se adapta dentro.
-              const es = editorSize();
-              await leaveOverlay(es.w, es.h);
-              setView({
-                kind: "annotate",
-                imageSrc: dataUrl,
-                width: Math.round(rect.width),
-                height: Math.round(rect.height),
-              });
-            } catch (e) {
-              setError(e instanceof Error ? e.message : String(e));
-            }
-          })();
-        }}
+        onCancel={goHome}
+        onSelect={(rect) => void handleSelect(view.capture, rect)}
       />
     );
   }
@@ -175,22 +175,48 @@ export default function App() {
         imageSrc={view.imageSrc}
         width={view.width}
         height={view.height}
-        onCancel={backHome}
-        onDone={backHome}
+        onCancel={goHome}
+        onDone={goHome}
       />
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="error-window">
+        <div className="error-head">
+          <span className="error-dot" />
+          <h2>Algo salió mal</h2>
+          <button
+            className="icon-btn"
+            onClick={() => setError(null)}
+            title="Volver al inicio"
+            aria-label="Volver al inicio"
+          >
+            <svg viewBox="0 0 24 24">
+              <path d="M18 6 L6 18 M6 6 L18 18" />
+            </svg>
+          </button>
+        </div>
+        <pre className="error-body">{error}</pre>
+        <p className="error-hint">
+          El detalle tecnico quedo anotado en <code>%TEMP%\snapx-debug.log</code>.
+        </p>
+        <button className="act-btn primary" onClick={() => void goHome()}>
+          Volver al inicio
+        </button>
+      </div>
     );
   }
 
   return (
     <HomeView
       hotkey={hotkey}
-      onCaptureArea={startAreaCapture}
-      onCapturePrimary={() => startFullCapture("primary")}
-      onCaptureAll={() => startFullCapture("all")}
-      onDemo={() => {
-        const src = DEMO_IMAGE(960, 620);
-        setView({ kind: "annotate", imageSrc: src, width: 960, height: 620 });
-      }}
+      busy={busy}
+      onCaptureArea={() => void startAreaCapture()}
+      onCapturePrimary={() => void startFullCapture("primary")}
+      onCaptureAll={() => void startFullCapture("all")}
+      onDemo={() => void openEditor(DEMO_IMAGE(1280, 800), 1280, 800)}
     />
   );
 }

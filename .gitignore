@@ -6,8 +6,10 @@ src-tauri/gen/
 
 # Rust
 **/*.rs.bk
-Cargo.lock
 *.pdb
+
+# Cargo.lock SI se versiona en una app de escritorio: fija las versiones
+# con las que se compila el binario que se distribuye.
 
 # SO / editores
 .DS_Store
