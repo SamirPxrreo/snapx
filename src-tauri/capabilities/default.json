@@ -20,6 +20,8 @@
     "core:event:allow-listen",
     "clipboard-manager:allow-write-image",
     "clipboard-manager:allow-read-text",
-    "dialog:allow-save"
+    "dialog:allow-save",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

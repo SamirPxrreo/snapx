@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getSettings, setSettings } from "../lib/tauri";
+import UpdateButton from "./UpdateButton";
 
 interface Props {
   hotkey: string | null;
